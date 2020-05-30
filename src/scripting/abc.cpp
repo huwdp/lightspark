@@ -133,6 +133,7 @@
 #include "scripting/flash/geom/flashgeom.h"
 #include "scripting/flash/globalization/datetimeformatter.h"
 #include "scripting/flash/globalization/datetimestyle.h"
+#include "scripting/flash/globalization/collator.h"
 #include "scripting/flash/globalization/collatormode.h"
 #include "scripting/flash/globalization/datetimenamecontext.h"
 #include "scripting/flash/globalization/datetimenamestyle.h"
@@ -799,6 +800,7 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("LastOperationStatus","flash.globalization",Class<LastOperationStatus>::getRef(m_sys));
 	builtin->registerBuiltin("CurrencyFormatter","flash.globalization",Class<CurrencyFormatter>::getRef(m_sys));
 	builtin->registerBuiltin("NumberFormatter","flash.globalization",Class<NumberFormatter>::getRef(m_sys));
+	builtin->registerBuiltin("Collator","flash.globalization",Class<Collator>::getRef(m_sys));
 	builtin->registerBuiltin("CollatorMode","flash.globalization",Class<CollatorMode>::getRef(m_sys));
 	builtin->registerBuiltin("DateTimeNameContext","flash.globalization",Class<DateTimeNameContext>::getRef(m_sys));
 	builtin->registerBuiltin("DateTimeNameStyle","flash.globalization",Class<DateTimeNameStyle>::getRef(m_sys));

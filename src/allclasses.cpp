@@ -89,6 +89,7 @@
 #include "scripting/flash/geom/flashgeom.h"
 #include "scripting/flash/globalization/datetimeformatter.h"
 #include "scripting/flash/globalization/datetimestyle.h"
+#include "scripting/flash/globalization/collator.h"
 #include "scripting/flash/globalization/collatormode.h"
 #include "scripting/flash/globalization/datetimenamecontext.h"
 #include "scripting/flash/globalization/datetimenamestyle.h"

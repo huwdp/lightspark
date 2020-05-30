@@ -315,7 +315,6 @@ ASFUNCTIONBODY_ATOM(LoaderInfo,_getURL)
 ASFUNCTIONBODY_ATOM(LoaderInfo,_getBytesLoaded)
 {
 	LoaderInfo* th=asAtomHandler::as<LoaderInfo>(obj);
-
 	asAtomHandler::setUInt(ret,sys,th->bytesLoaded);
 }
 
