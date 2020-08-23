@@ -32,7 +32,20 @@ private:
 	tiny_string initialMode;
 	tiny_string sortingMode;
 public:
-	int32_t compareStrings(std::string string1, std::string string2);
+	int compare(std::string string1,
+		std::string string2,
+		bool ignoreCase,
+		bool ignoreCharacterWidth,
+		bool ignoreDiacritics,
+		bool ignoreKanaType,
+		bool ignoreSymbols);
+	bool equals(std::string string1,
+		std::string string2,
+		bool ignoreCase,
+		bool ignoreCharacterWidth,
+		bool ignoreDiacritics,
+		bool ignoreKanaType,
+		bool ignoreSymbols);
 	bool isSymbol(char character);
 	Collator(Class_base* c):ASObject(c){}
 	static void sinit(Class_base* c);

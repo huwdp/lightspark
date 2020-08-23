@@ -49,7 +49,6 @@ ASFUNCTIONBODY_ATOM(Collator,_constructor)
 
 	ARG_UNPACK_ATOM(th->requestedLocaleIDName);
 	ARG_UNPACK_ATOM(th->initialMode);
-	ARG_UNPACK_ATOM(th->sortingMode);
 
 	try
 	{
@@ -121,7 +120,7 @@ ASFUNCTIONBODY_GETTER(Collator, requestedLocaleIDName);
 bool Collator::isSymbol(char character)
 {
 	// Space is a symbol in this API
-	if (isspace(character)) 
+	if (isspace(character) || character == ' ' || character == 32) 
 	{
 		return true;
 	}
@@ -133,15 +132,84 @@ bool Collator::isSymbol(char character)
 	return iswcntrl(character);
 }
 
-int32_t Collator::compareStrings(std::string string1, std::string string2)
+int Collator::compare(
+	std::string string1,
+	std::string string2,
+	bool ignoreCase,
+	bool ignoreCharacterWidth,
+	bool ignoreDiacritics,
+	bool ignoreKanaType,
+	bool ignoreSymbols)
 {
-	int32_t result = 0;
-    string::iterator string1It = string1.begin();
+	string::iterator string1It = string1.begin();
     string::iterator string2It = string2.begin();
-    while (string1It != string1.end() && string1It != string2.end())
-    {
+	string s1 = "";
+	string s2 = "";
+	while (string1It != string1.end())
+	{
+		char char1 = (*string1It);
+		if (ignoreSymbols && isSymbol(char1))
+		{
+
+		}
+		else if (ignoreCase)
+		{
+			char1 = std::tolower(char1);
+			s1.push_back(char1);
+		}
+		else
+		{
+			s1.push_back(char1);
+		}
+		string1It++;
+	}
+
+	while (string2It != string2.end())
+	{
+		char char2 = (*string2It);
+		if (ignoreSymbols && isSymbol(char2))
+		{
+
+		}
+		else if (ignoreCase)
+		{
+			char2 = std::tolower(char2);
+			s2.push_back(char2);
+		}
+		else
+		{
+			s2.push_back(char2);
+		}
+		string2It++;
+	}
+	int result = s2.compare(s1);
+	if (result > 0)
+	{
+		return 1;
+	}
+	if (result < 0)
+	{
+		return -1;
+	}
+	return 0;
+}
+
+bool Collator::equals(
+	std::string string1,
+	std::string string2,
+	bool ignoreCase,
+	bool ignoreCharacterWidth,
+	bool ignoreDiacritics,
+	bool ignoreKanaType,
+	bool ignoreSymbols)
+{
+	string::iterator string1It = string1.begin();
+	string::iterator string2It = string2.begin();
+	
+	while (string1It != string1.end() && string2It != string2.end())
+	{
 		gunichar char1 = (*string1It);
-        gunichar char2 = (*string2It);
+		gunichar char2 = (*string2It);
 
 		if (ignoreCase)
 		{
@@ -151,7 +219,6 @@ int32_t Collator::compareStrings(std::string string1, std::string string2)
 
 		if (ignoreSymbols && (isSymbol(char1) || isSymbol(char2)))
 		{
-			//std::cout << std::to_string(char1) << ":" << std::to_string(char2) << std::endl;
 			if (isSymbol(char1))
 			{
 				++string1It;
@@ -165,25 +232,21 @@ int32_t Collator::compareStrings(std::string string1, std::string string2)
 		{
 			if (char1 != char2)
 			{
-				result += char1 == char2;
+				return false;
 			}
 			++string1It;
-	        ++string2It;
+			++string2It;
 		}
-    }
-
-    // Count empty strings from either string1 or string2
-    while (string1It != string1.end())
-    {
-        result += 1;
-        ++string1It;
-    }
-    while (string2It != string2.end())
-    {
-        result += 1;
-        ++string2It;
-    }
-    return result;
+	}
+	if (string1It != string1.end())
+	{
+		return false;
+	}
+	if (string2It != string2.end())
+	{
+		return false;
+	}
+	return true;
 }
 
 ASFUNCTIONBODY_ATOM(Collator,compare)
@@ -215,16 +278,16 @@ ASFUNCTIONBODY_ATOM(Collator,compare)
 		std::string s1 = string1.raw_buf();
 		std::string s2 = string2.raw_buf();
 	    std::locale::global(l);
-		int32_t value = 0;
-		if (s1 > s2)
+	 	int value = 0;
+		if (th->initialMode == "matching")
 		{
-			value = 1;
+			value = th->compare(s1, s2, true, true, true, true, true);
 		}
-		else if (s1 < s2)
+		else
 		{
-			value = -1;
+			value = th->compare(s1, s2, th->ignoreCase, th->ignoreCharacterWidth, th->ignoreDiacritics, th->ignoreKanaType, th->ignoreSymbols);
 		}
-		ret = asAtomHandler::fromInt((int32_t)value);
+		ret = asAtomHandler::fromInt(value);
 		th->lastOperationStatus = "noError";
     }
     catch (std::runtime_error& e)
@@ -263,7 +326,15 @@ ASFUNCTIONBODY_ATOM(Collator,equals)
 		std::string s1 = string1.raw_buf();
 		std::string s2 = string2.raw_buf();
 	    std::locale::global(l);
-		bool value = th->compareStrings(s1, s2) == 0;
+		bool value = false;
+		if (th->initialMode == "matching")
+		{
+			value = th->equals(s1, s2, true, true, true, true, true);
+		}
+		else
+		{
+			value = th->equals(s1, s2, th->ignoreCase, th->ignoreCharacterWidth, th->ignoreDiacritics, th->ignoreKanaType, th->ignoreSymbols);
+		}
 		ret = asAtomHandler::fromBool(value);
 		th->lastOperationStatus = "noError";
     }
