@@ -166,6 +166,11 @@ public:
 			delete[] cc.scope_stack_dynamic;
 			cc.scope_stack_dynamic=nullptr;
 		}
+		if (cc.localslots)
+		{
+			delete[] cc.localslots;
+			cc.localslots=nullptr;
+		}
 	}
 };
 
@@ -183,12 +188,12 @@ enum ARGS_TYPE { ARGS_OBJ_OBJ=0, ARGS_OBJ_INT, ARGS_OBJ, ARGS_INT, ARGS_OBJ_OBJ_
 enum OPERANDTYPES { 
 	OP_UNDEFINED=0x00, OP_STRING=0x01, OP_INTEGER=0x03, OP_UINTEGER=0x04, OP_DOUBLE=0x06, OP_NAMESPACE=0x08, 
 	OP_FALSE=0x0a, OP_TRUE=0x0b, OP_NULL=0x0c, OP_NAN=0x0d,
-	OP_LOCAL=0x10, OP_BYTE=0x20, OP_SHORT=0x30, OP_CACHED_CONSTANT=0x40};
+	OP_LOCAL=0x10, OP_BYTE=0x20, OP_SHORT=0x30, OP_CACHED_CONSTANT=0x40, OP_CACHED_SLOT=0x80};
 
-#define ABC_OP_CACHED 0x10000000 
-#define ABC_OP_NOTCACHEABLE 0x20000000 
-#define ABC_OP_COERCED 0x40000000 //indicates that the method call doesn't have to coerce the arguments to the expected type
-#define ABC_OP_AVAILABLEBITS 0x0fffffff
+#define ABC_OP_FORCEINT 0x0001 // forces the result of the arithmetic operation to be coerced to int
+#define ABC_OP_CACHED 0x0002
+#define ABC_OP_NOTCACHEABLE 0x0004
+#define ABC_OP_COERCED 0x0008 //indicates that the method call doesn't have to coerce the arguments to the expected type
 
 struct typed_opcode_handler
 {
@@ -314,7 +319,7 @@ friend class ACTIONRECORD;
 private:
 	std::vector<ABCContext*> contexts;
 	SystemState* m_sys;
-	Thread* t;
+	SDL_Thread* t;
 	enum STATUS { CREATED=0, STARTED, TERMINATED };
 	STATUS status;
 	bool isIdle;
@@ -576,8 +581,6 @@ private:
 	// The base to assign to the next loaded context
 	ATOMIC_INT32(nextNamespaceBase);
 
-	typedef void (*abc_function)(call_context*);
-	
 	static void abc_bkpt(call_context* context);// 0x01
 	static void abc_nop(call_context* context);
 	static void abc_throw(call_context* context);
@@ -667,6 +670,12 @@ private:
 	static void abc_pushnan(call_context* context);
 	static void abc_pop(call_context* context);
 	static void abc_dup(call_context* context);
+	static void abc_dup_local(call_context* context);
+	static void abc_dup_local_localresult(call_context* context);
+	static void abc_dup_increment_local_localresult(call_context* context);
+	static void abc_dup_decrement_local_localresult(call_context* context);
+	static void abc_dup_increment_i_local_localresult(call_context* context);
+	static void abc_dup_decrement_i_local_localresult(call_context* context);
 	static void abc_swap(call_context* context);
 	static void abc_pushstring(call_context* context);
 	static void abc_pushint(call_context* context);
@@ -819,6 +828,14 @@ private:
 	static void abc_setPropertyInteger_local_local_constant(call_context* context);
 	static void abc_setPropertyInteger_local_constant_local(call_context* context);
 	static void abc_setPropertyInteger_local_local_local(call_context* context);
+	static void abc_setPropertyIntegerVector_constant_constant_constant(call_context* context);
+	static void abc_setPropertyIntegerVector_constant_local_constant(call_context* context);
+	static void abc_setPropertyIntegerVector_constant_constant_local(call_context* context);
+	static void abc_setPropertyIntegerVector_constant_local_local(call_context* context);
+	static void abc_setPropertyIntegerVector_local_constant_constant(call_context* context);
+	static void abc_setPropertyIntegerVector_local_local_constant(call_context* context);
+	static void abc_setPropertyIntegerVector_local_constant_local(call_context* context);
+	static void abc_setPropertyIntegerVector_local_local_local(call_context* context);
 	static void abc_getlocal(call_context* context);
 	static void abc_setlocal(call_context* context);
 	static void abc_setlocal_constant(call_context* context);
@@ -1110,6 +1127,7 @@ private:
 	static void abc_timestamp(call_context* context);
 	
 	static void abc_pushcachedconstant(call_context* context);
+	static void abc_pushcachedslot(call_context* context);
 
 	static void abc_getlexfromslot(call_context* context);
 	static void abc_getlexfromslot_localresult(call_context* context);
@@ -1150,13 +1168,10 @@ private:
 	static void abc_decrement_i_local(call_context* context);
 	static void abc_decrement_i_local_localresult(call_context* context);
 
-	static void abc_callFunctionMultiArgsVoid(call_context* context);
-	static void abc_callFunctionMultiArgs(call_context* context);
-
 	static void abc_invalidinstruction(call_context* context);
 
-	static abc_function abcfunctions[];
 public:
+	static abc_function abcfunctions[];
 	call_context* currentCallContext;
 
 	MemoryAccount* vmDataMemory;
@@ -1185,7 +1200,7 @@ public:
 	*/
 	void start() DLL_PUBLIC;
 	void finalize();
-	static void Run(ABCVm* th);
+	static int Run(void* d);
 	static void executeFunction(call_context* context);
 #ifndef NDEBUG
 	static void dumpOpcodeCounters(uint32_t threshhold);

@@ -326,8 +326,24 @@ SyntheticFunction::SyntheticFunction(Class_base* c,method_info* m):IFunction(c,S
 void SyntheticFunction::call(asAtom& ret, asAtom& obj, asAtom *args, uint32_t numArgs,bool coerceresult, bool coercearguments)
 {
 	const method_body_info::CODE_STATUS& codeStatus = mi->body->codeStatus;
-
 	call_context* saved_cc = getVm(getSystemState())->incStack(obj,this->functionname);
+	if (codeStatus != method_body_info::PRELOADED && codeStatus != method_body_info::USED)
+	{
+		ABCVm::preloadFunction(this);
+		mi->body->codeStatus = method_body_info::PRELOADED;
+		mi->cc.exec_pos = mi->body->preloadedcode.data();
+		mi->cc.locals = new asAtom[mi->body->getReturnValuePos()+1+mi->body->localresultcount];
+		mi->cc.stack = new asAtom[mi->body->max_stack+1];
+		mi->cc.scope_stack = new asAtom[mi->body->max_scope_depth];
+		mi->cc.scope_stack_dynamic = new bool[mi->body->max_scope_depth];
+		mi->cc.max_stackp=mi->cc.stack+mi->cc.mi->body->max_stack;
+		mi->cc.lastlocal = mi->cc.locals+mi->cc.mi->body->getReturnValuePos()+1+mi->body->localresultcount;
+		mi->cc.localslots = new asAtom*[mi->body->localconstantslots.size()+mi->body->getReturnValuePos()+1+mi->body->localresultcount];
+		for (uint32_t i = 0; i < uint32_t(mi->body->getReturnValuePos()+1+mi->body->localresultcount); i++)
+		{
+			mi->cc.localslots[i] = &mi->cc.locals[i];
+		}
+	}
 
 	/* resolve argument and return types */
 	if(!mi->returnType)
@@ -389,12 +405,17 @@ void SyntheticFunction::call(asAtom& ret, asAtom& obj, asAtom *args, uint32_t nu
 	if (recursive_call)
 	{
 		cc = new call_context(mi);
-		cc->locals= g_newa(asAtom, mi->body->local_count+1+2); // +2, because we need two more elements to store result of optimized operations
+		cc->locals= g_newa(asAtom, mi->body->getReturnValuePos()+1+mi->body->localresultcount);
 		cc->stack = g_newa(asAtom, mi->body->max_stack+1);
 		cc->scope_stack=g_newa(asAtom, mi->body->max_scope_depth);
 		cc->scope_stack_dynamic=g_newa(bool, mi->body->max_scope_depth);
 		cc->max_stackp=cc->stackp+cc->mi->body->max_stack;
-		cc->lastlocal = cc->locals+mi->body->local_count+1+2;
+		cc->lastlocal = cc->locals+mi->body->getReturnValuePos()+1+mi->body->localresultcount;
+		cc->localslots = g_newa(asAtom*,mi->body->localconstantslots.size()+mi->body->getReturnValuePos()+1+mi->body->localresultcount);
+		for (uint32_t i = 0; i < uint32_t(mi->body->getReturnValuePos()+1+mi->body->localresultcount); i++)
+		{
+			cc->localslots[i] = &cc->locals[i];
+		}
 	}
 	else
 	{
@@ -405,7 +426,6 @@ void SyntheticFunction::call(asAtom& ret, asAtom& obj, asAtom *args, uint32_t nu
 	cc->defaultNamespaceUri = saved_cc ? saved_cc->defaultNamespaceUri : (uint32_t)BUILTIN_STRINGS::EMPTY;
 	cc->inClass = this->inClass;
 	cc->stackp = cc->stack;
-	cc->returning=false;
 
 	/* Set the current global object, each script in each DoABCTag has its own */
 	getVm(getSystemState())->currentCallContext = cc;
@@ -442,7 +462,7 @@ void SyntheticFunction::call(asAtom& ret, asAtom& obj, asAtom *args, uint32_t nu
 			cc->locals[i+1]=asAtomHandler::undefinedAtom;
 		}
 	}
-	memset(cc->locals+args_len+1,ATOMTYPE_UNDEFINED_BIT,(mi->body->local_count+2-(args_len))*sizeof(asAtom));
+	memset(cc->locals+args_len+1,ATOMTYPE_UNDEFINED_BIT,(mi->body->getReturnValuePos()+mi->body->localresultcount-(args_len))*sizeof(asAtom));
 	if(mi->needsArgs())
 	{
 		assert_and_throw(cc->mi->body->local_count>args_len);
@@ -486,11 +506,21 @@ void SyntheticFunction::call(asAtom& ret, asAtom& obj, asAtom *args, uint32_t nu
 				}
 				else
 				{
-					if (codeStatus != method_body_info::PRELOADED && codeStatus != method_body_info::USED)
+					// returnvalue
+					cc->locals[mi->body->getReturnValuePos()]=asAtomHandler::invalidAtom;
+					// fill additional locals with slots of objects that don't change during execution
+					int i = mi->body->getReturnValuePos()+1+mi->body->localresultcount;
+					for (auto it = mi->body->localconstantslots.begin(); it != mi->body->localconstantslots.end(); it++)
 					{
-						ABCVm::preloadFunction(this);
-						mi->body->codeStatus = method_body_info::PRELOADED;
-						cc->exec_pos = mi->body->preloadedcode.data();
+						assert(it->local_pos < (mi->numArgs()-mi->numOptions())+1);
+						if (asAtomHandler::isObject(cc->locals[it->local_pos]))
+						{
+							ASObject* o = asAtomHandler::getObjectNoCheck(cc->locals[it->local_pos]);
+							cc->localslots[i] = &(o->getSlotVar(it->slot_number)->var);
+						}
+						else
+							cc->localslots[i] = &asAtomHandler::nullAtom;
+						i++;
 					}
 					//Switch the codeStatus to USED to make sure the method will not be optimized while being used
 					const method_body_info::CODE_STATUS oldCodeStatus = codeStatus;
@@ -504,7 +534,6 @@ void SyntheticFunction::call(asAtom& ret, asAtom& obj, asAtom *args, uint32_t nu
 					}
 					//This is not a hot function, execute it using the interpreter
 					ABCVm::executeFunction(cc);
-					ret = cc->returnvalue;
 					//Restore the previous codeStatus
 					mi->body->codeStatus = oldCodeStatus;
 				}
@@ -557,12 +586,10 @@ void SyntheticFunction::call(asAtom& ret, asAtom& obj, asAtom *args, uint32_t nu
 	Log::calls_indent--;
 #endif
 
-	if(asAtomHandler::isInvalid(ret))
-		asAtomHandler::setUndefined(ret);
-	else
-		coerceresult=true;
+	ret.uintval = cc->locals[mi->body->getReturnValuePos()].uintval;
+	ASATOM_INCREF(ret);
 
-	if (coerceresult && mi->needscoerceresult)
+	if (coerceresult || mi->needscoerceresult)
 	{
 		asAtom v = ret;
 		if (mi->returnType->coerce(getSystemState(),ret))
@@ -595,7 +622,6 @@ void SyntheticFunction::call(asAtom& ret, asAtom& obj, asAtom *args, uint32_t nu
 	if (cc->scope_stack[0].uintval != obj.uintval && mi->needsscope)
 		ASATOM_DECREF_POINTER(cc->scope_stack);
 	cc->curr_scope_stack=0;
-	cc->returning=false;
 	if (!isMethod())
 		this->decRef(); //free local ref
 	for (auto it = cc->dynamicfunctions.begin(); it != cc->dynamicfunctions.end(); it++)
@@ -700,6 +726,20 @@ bool Function::isEqual(ASObject* r)
 		return false;
 	Function* f=r->as<Function>();
 	return (val_atom==f->val_atom);
+}
+
+Class_base *Function::getReturnType()
+{
+	if (!returnType && inClass && this->functionname)
+		LOG(LOG_NOT_IMPLEMENTED,"no returntype given for "<<inClass->toDebugString()<<" "<<getSystemState()->getStringFromUniqueId(this->functionname));
+	return returnType;
+}
+
+Class_base *Function::getArgumentDependentReturnType(bool allargsint)
+{
+	if (!returnType && inClass && this->functionname)
+		LOG(LOG_NOT_IMPLEMENTED,"no arg dependent returntype given for "<<inClass->toDebugString()<<" "<<getSystemState()->getStringFromUniqueId(this->functionname));
+	return allargsint && returnTypeAllArgsInt ? returnTypeAllArgsInt : returnType;
 }
 
 bool Null::isEqual(ASObject* r)
@@ -925,8 +965,17 @@ const Type* Type::getTypeFromMultiname(const multiname* mn, ABCContext* context)
 	{
 		if (mn->ns.size() >= 1 && mn->ns[0].nsNameId == BUILTIN_STRINGS::STRING_AS3VECTOR)
 		{
-			QName qname(mn->name_s_id,mn->ns[0].nsNameId);
-			typeObject = Template<Vector>::getTemplateInstance(context->root->getSystemState(),qname,context,context->root->applicationDomain).getPtr();
+			if (mn->templateinstancenames.size() == 1)
+			{
+				const Type* instancetype = getTypeFromMultiname(mn->templateinstancenames.front(),context);
+				typeObject = Template<Vector>::getTemplateInstance(context->root->getSystemState(),instancetype,context->root->applicationDomain).getPtr();
+			}
+			else
+			{
+				LOG(LOG_NOT_IMPLEMENTED,"getTypeFromMultiname with "<<mn->templateinstancenames.size()<<" instance types");
+				QName qname(mn->name_s_id,mn->ns[0].nsNameId);
+				typeObject = Template<Vector>::getTemplateInstance(context->root->getSystemState(),qname,context,context->root->applicationDomain).getPtr();
+			}
 		}
 		if (!typeObject)
 			LOG(LOG_ERROR,"not found:"<<*mn);

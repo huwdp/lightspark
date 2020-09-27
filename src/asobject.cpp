@@ -953,17 +953,12 @@ void variable::setVar(asAtom v,ASObject *obj, bool _isrefcounted)
 	isrefcounted = _isrefcounted;
 }
 
-void variable::setVarNoCoerce(asAtom &v,ASObject *obj)
+void variable::preparereplacevar(ASObject *obj)
 {
-	if(isrefcounted && asAtomHandler::isObject(var))
-	{
-		LOG_CALL("replacing:"<<asAtomHandler::toDebugString(var));
-		if (obj->is<Activation_object>() && asAtomHandler::is<SyntheticFunction>(var))
-			asAtomHandler::getObject(var)->decActivationCount();
-		ASATOM_DECREF(var);
-	}
-	var=v;
-	isrefcounted = true;
+	LOG_CALL("replacing:"<<asAtomHandler::toDebugString(var));
+	if (obj->is<Activation_object>() && asAtomHandler::is<SyntheticFunction>(var))
+		asAtomHandler::getObject(var)->decActivationCount();
+	ASATOM_DECREF(var);
 }
 
 void variables_map::killObjVar(SystemState* sys,const multiname& mname)
@@ -1559,7 +1554,7 @@ void ASObject::check() const
 #ifndef NDEBUG
 	assert(getConstant() || (getRefCount()>0));
 #endif
-	Variables.check();
+//	Variables.check();
 }
 
 void variables_map::check() const
@@ -1848,6 +1843,30 @@ bool ASObject::AVM1HandleMouseEventStandard(ASObject *dispobj,MouseEvent *e)
 			asAtomHandler::as<AVM1Function>(func)->call(&ret,&obj,nullptr,0);
 			result=true;
 		}
+	}
+	else if (e->type == "rollOver")
+	{
+		m.name_s_id=BUILTIN_STRINGS::STRING_ONROLLOVER;
+		getVariableByMultiname(func,m);
+		if (asAtomHandler::is<AVM1Function>(func))
+		{
+			asAtomHandler::as<AVM1Function>(func)->call(&ret,&obj,nullptr,0);
+			result=true;
+		}
+	}
+	else if (e->type == "rollOut")
+	{
+		m.name_s_id=BUILTIN_STRINGS::STRING_ONROLLOUT;
+		getVariableByMultiname(func,m);
+		if (asAtomHandler::is<AVM1Function>(func))
+		{
+			asAtomHandler::as<AVM1Function>(func)->call(&ret,&obj,nullptr,0);
+			result=true;
+		}
+	}
+	else if (e->type == "mouseOver" || e->type == "mouseOut")
+	{
+		// not available in AVM1
 	}
 	else
 		LOG(LOG_NOT_IMPLEMENTED,"handling avm1 mouse event "<<e->type);
@@ -2930,7 +2949,7 @@ void asAtomHandler::convert_b(asAtom& a, bool refcounted)
 	setBool(a,v);
 }
 
-bool asAtomHandler::add(asAtom& a,asAtom &v2, SystemState* sys)
+bool asAtomHandler::add(asAtom& a,asAtom &v2, SystemState* sys,bool forceint)
 {
 	//Implement ECMA add algorithm, for XML and default (see avm2overview)
 
@@ -2942,7 +2961,7 @@ bool asAtomHandler::add(asAtom& a,asAtom &v2, SystemState* sys)
 		int64_t num2=toInt64(v2);
 		int64_t res = num1+num2;
 		LOG_CALL("addI " << num1 << '+' << num2 <<"="<<res);
-		if (res >= -(1<<28) && res < (1<<28))
+		if (forceint || (res >= -(1<<28) && res < (1<<28)))
 			setInt(a,sys,res);
 		else if (res >= 0 && res < (1<<29))
 			setUInt(a,sys,res);
@@ -2955,14 +2974,20 @@ bool asAtomHandler::add(asAtom& a,asAtom &v2, SystemState* sys)
 		double num1=toNumber(a);
 		double num2=toNumber(v2);
 		LOG_CALL("addN " << num1 << '+' << num2<<" "<<toDebugString(a)<<" "<<toDebugString(v2));
-		setNumber(a,sys,num1+num2);
+		if (forceint)
+			setInt(a,sys,num1+num2);
+		else
+			setNumber(a,sys,num1+num2);
 	}
 	else if(isString(a) || isString(v2))
 	{
 		tiny_string sa = toString(a,sys);
 		sa += toString(v2,sys);
 		LOG_CALL("add " << toString(a,sys) << '+' << toString(v2,sys));
-		a.uintval = (LIGHTSPARK_ATOM_VALTYPE)(abstract_s(sys,sa))|ATOM_STRINGPTR;
+		if (forceint)
+			setInt(a,sys,Integer::stringToASInteger(sa.raw_buf(),0));
+		else
+			a.uintval = (LIGHTSPARK_ATOM_VALTYPE)(abstract_s(sys,sa))|ATOM_STRINGPTR;
 	}
 	else
 	{
@@ -2986,7 +3011,13 @@ bool asAtomHandler::add(asAtom& a,asAtom &v2, SystemState* sys)
 			else //if(val2->getClass()==xmlListClass)
 				newList->append(_MR(static_cast<XMLList*>(val2)));
 
-			a.uintval = (LIGHTSPARK_ATOM_VALTYPE)(newList)|ATOM_OBJECTPTR;
+			if (forceint)
+			{
+				setInt(a,sys,newList->toInt());
+				newList->decRef();
+			}
+			else
+				a.uintval = (LIGHTSPARK_ATOM_VALTYPE)(newList)|ATOM_OBJECTPTR;
 			//The references of val1 and val2 have been passed to the smart references
 			//no decRef is needed
 			return false;
@@ -3002,7 +3033,13 @@ bool asAtomHandler::add(asAtom& a,asAtom &v2, SystemState* sys)
 				string as(toString(val1p,sys).raw_buf());
 				string bs(toString(val2p,sys).raw_buf());
 				LOG_CALL("add " << as << '+' << bs);
-				a.uintval = (LIGHTSPARK_ATOM_VALTYPE)(abstract_s(sys,as+bs))|ATOM_STRINGPTR;
+				if (forceint)
+				{
+					tiny_string s = as+bs;
+					setInt(a,sys,Integer::stringToASInteger(s.raw_buf(),0));
+				}
+				else
+					a.uintval = (LIGHTSPARK_ATOM_VALTYPE)(abstract_s(sys,as+bs))|ATOM_STRINGPTR;
 			}
 			else
 			{//Convert both to numbers and add
@@ -3010,13 +3047,16 @@ bool asAtomHandler::add(asAtom& a,asAtom &v2, SystemState* sys)
 				number_t num2=AVM1toNumber(val2p,sys->mainClip->version);
 				LOG_CALL("addN " << num1 << '+' << num2);
 				number_t result = num1 + num2;
-				setNumber(a,sys,result);
+				if (forceint)
+					setInt(a,sys,result);
+				else
+					setNumber(a,sys,result);
 			}
 		}
 	}
 	return true;
 }
-void asAtomHandler::addreplace(asAtom& ret, SystemState* sys,asAtom& v1, asAtom &v2)
+void asAtomHandler::addreplace(asAtom& ret, SystemState* sys,asAtom& v1, asAtom &v2,bool forceint)
 {
 	//Implement ECMA add algorithm, for XML and default (see avm2overview)
 
@@ -3028,7 +3068,7 @@ void asAtomHandler::addreplace(asAtom& ret, SystemState* sys,asAtom& v1, asAtom 
 		int64_t num2=toInt64(v2);
 		int64_t res = num1+num2;
 		LOG_CALL("addI " << num1 << '+' << num2 <<"="<<res);
-		if (res >= -(1<<28) && res < (1<<28))
+		if (forceint || (res >= -(1<<28) && res < (1<<28)))
 			setInt(ret,sys,res);
 		else if (res >= 0 && res < (1<<29))
 			setUInt(ret,sys,res);
@@ -3042,7 +3082,13 @@ void asAtomHandler::addreplace(asAtom& ret, SystemState* sys,asAtom& v1, asAtom 
 		double num2=toNumber(v2);
 		LOG_CALL("addN " << num1 << '+' << num2<<" "<<toDebugString(v1)<<" "<<toDebugString(v2));
 		ASObject* o = getObject(ret);
-		if (replaceNumber(ret,sys,num1+num2) && o)
+		if (forceint)
+		{
+			setInt(ret,sys,num1+num2);
+			if (o)
+				o->decRef();
+		}
+		else if (replaceNumber(ret,sys,num1+num2) && o)
 			o->decRef();
 	}
 	else if(isString(v1) || isString(v2))
@@ -3051,7 +3097,10 @@ void asAtomHandler::addreplace(asAtom& ret, SystemState* sys,asAtom& v1, asAtom 
 		sa += toString(v2,sys);
 		LOG_CALL("add " << toString(v1,sys) << '+' << toString(v2,sys));
 		ASATOM_DECREF(ret);
-		ret.uintval = (LIGHTSPARK_ATOM_VALTYPE)(abstract_s(sys,sa))|ATOM_STRINGPTR;
+		if (forceint)
+			setInt(ret,sys,Integer::stringToASInteger(sa.raw_buf(),0));
+		else
+			ret.uintval = (LIGHTSPARK_ATOM_VALTYPE)(abstract_s(sys,sa))|ATOM_STRINGPTR;
 	}
 	else
 	{
@@ -3075,7 +3124,13 @@ void asAtomHandler::addreplace(asAtom& ret, SystemState* sys,asAtom& v1, asAtom 
 			else //if(val2->getClass()==xmlListClass)
 				newList->append(_MR(static_cast<XMLList*>(val2)));
 
-			ret.uintval = (LIGHTSPARK_ATOM_VALTYPE)(newList)|ATOM_OBJECTPTR;
+			if (forceint)
+			{
+				setInt(ret,sys,newList->toInt());
+				newList->decRef();
+			}
+			else
+				ret.uintval = (LIGHTSPARK_ATOM_VALTYPE)(newList)|ATOM_OBJECTPTR;
 			//The references of val1 and val2 have been passed to the smart references
 			//no decRef is needed
 		}
@@ -3091,7 +3146,13 @@ void asAtomHandler::addreplace(asAtom& ret, SystemState* sys,asAtom& v1, asAtom 
 				string bs(toString(val2p,sys).raw_buf());
 				LOG_CALL("add " << as << '+' << bs);
 				ASATOM_DECREF(ret);
-				ret.uintval = (LIGHTSPARK_ATOM_VALTYPE)(abstract_s(sys,as+bs))|ATOM_STRINGPTR;
+				if (forceint)
+				{
+					tiny_string s = as+bs;
+					setInt(ret,sys,Integer::stringToASInteger(s.raw_buf(),0));
+				}
+				else
+					ret.uintval = (LIGHTSPARK_ATOM_VALTYPE)(abstract_s(sys,as+bs))|ATOM_STRINGPTR;
 			}
 			else
 			{//Convert both to numbers and add
@@ -3099,7 +3160,13 @@ void asAtomHandler::addreplace(asAtom& ret, SystemState* sys,asAtom& v1, asAtom 
 				number_t num2=AVM1toNumber(val2p,sys->mainClip->version);
 				LOG_CALL("addN " << num1 << '+' << num2);
 				ASObject* o = getObject(ret);
-				if (replaceNumber(ret,sys,num1+num2) && o)
+				if (forceint)
+				{
+					setInt(ret,sys,num1+num2);
+					if (o)
+						o->decRef();
+				}
+				else if (replaceNumber(ret,sys,num1+num2) && o)
 					o->decRef();
 			}
 		}
@@ -3686,6 +3753,9 @@ bool asAtomHandler::isEqualIntern(asAtom& a, SystemState *sys, asAtom &v2)
 				}
 				case ATOM_STRINGID:
 					return (v2.uintval>>3) == (a.uintval>>3);
+				case ATOM_INTEGER:
+				case ATOM_UINTEGER:
+					return isEqual(v2,sys,a);
 				default:
 					return isEqual(v2,sys,a);
 			}
@@ -3711,6 +3781,9 @@ bool asAtomHandler::isEqualIntern(asAtom& a, SystemState *sys, asAtom &v2)
 				}
 				case ATOM_STRINGID:
 					return toString(a,sys) == toString(v2,sys);
+				case ATOM_INTEGER:
+				case ATOM_UINTEGER:
+					return isEqual(v2,sys,a);
 				default:
 					break;
 			}

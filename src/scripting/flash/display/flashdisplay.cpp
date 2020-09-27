@@ -56,7 +56,7 @@ std::ostream& lightspark::operator<<(std::ostream& s, const DisplayObject& r)
 
 LoaderInfo::LoaderInfo(Class_base* c):EventDispatcher(c),applicationDomain(NullRef),securityDomain(NullRef),
 	contentType("application/x-shockwave-flash"),
-	bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),
+	bytesLoaded(0),bytesLoadedPublic(0),bytesTotal(0),sharedEvents(NullRef),
 	loader(NullRef),bytesData(NullRef),loadStatus(STARTED),actionScriptVersion(3),swfVersion(0),
 	childAllowsParent(true),uncaughtErrorEvents(NullRef),parentAllowsChild(true),frameRate(0)
 {
@@ -69,7 +69,7 @@ LoaderInfo::LoaderInfo(Class_base* c):EventDispatcher(c),applicationDomain(NullR
 
 LoaderInfo::LoaderInfo(Class_base* c, _R<Loader> l):EventDispatcher(c),applicationDomain(NullRef),securityDomain(NullRef),
 	contentType("application/x-shockwave-flash"),
-	bytesLoaded(0),bytesTotal(0),sharedEvents(NullRef),
+	bytesLoaded(0),bytesLoadedPublic(0),bytesTotal(0),sharedEvents(NullRef),
 	loader(l),bytesData(NullRef),loadStatus(STARTED),actionScriptVersion(3),swfVersion(0),
 	childAllowsParent(true),uncaughtErrorEvents(NullRef),parentAllowsChild(true),frameRate(0)
 {
@@ -128,6 +128,7 @@ bool LoaderInfo::destruct()
 	bytesData.reset();
 	contentType = "application/x-shockwave-flash";
 	bytesLoaded = 0;
+	bytesLoadedPublic = 0;
 	bytesTotal = 0;
 	loadStatus =STARTED;
 	actionScriptVersion = 3;
@@ -144,8 +145,9 @@ bool LoaderInfo::destruct()
 
 void LoaderInfo::resetState()
 {
-	SpinlockLocker l(spinlock);
+	Locker l(spinlock);
 	bytesLoaded=0;
+	bytesLoadedPublic = 0;
 	bytesTotal=0;
 	if(!bytesData.isNull())
 		bytesData->setLength(0);
@@ -154,7 +156,7 @@ void LoaderInfo::resetState()
 
 void LoaderInfo::setComplete()
 {
-	SpinlockLocker l(spinlock);
+	Locker l(spinlock);
 	if (loadStatus==STARTED)
 	{
 		sendInit();
@@ -172,7 +174,7 @@ void LoaderInfo::setBytesLoaded(uint32_t b)
 {
 	if(b!=bytesLoaded)
 	{
-		SpinlockLocker l(spinlock);
+		Locker l(spinlock);
 		bytesLoaded=b;
 		if(getVm(getSystemState()))
 		{
@@ -199,7 +201,7 @@ void LoaderInfo::setBytesLoaded(uint32_t b)
 				}
 			}
 		}
-		if(loadStatus==INIT_SENT)
+		if(bytesLoaded == bytesTotal && loadStatus==INIT_SENT)
 		{
 			//The clip is also complete now
 			if(getVm(getSystemState()))
@@ -229,22 +231,19 @@ void LoaderInfo::sendInit()
 
 void LoaderInfo::setWaitedObject(_NR<DisplayObject> w)
 {
-	SpinlockLocker l(spinlock);
+	Locker l(spinlock);
 	waitedObject = w;
 }
 
 void LoaderInfo::objectHasLoaded(_R<DisplayObject> obj)
 {
-	SpinlockLocker l(spinlock);
+	Locker l(spinlock);
 	if(waitedObject != obj)
 		return;
 	if(!loader.isNull() && obj==waitedObject)
 		loader->setContent(obj);
 
-	// the init/complete events are sended after the first frame of the waitedObject was executed
-	if (loader.isNull() || waitedObject.isNull())
-		sendInit();
-	else if (!loader->getParent()) // loader has no parent, ensure init/complete events are sended anyway
+	if (!loader.isNull() && !loader->getParent()) // loader has no parent, ensure init/complete events are sended anyway
 		loader->getSystemState()->stage->addHiddenObject(waitedObject);
 		
 	waitedObject.reset();
@@ -322,8 +321,8 @@ ASFUNCTIONBODY_ATOM(LoaderInfo,_getURL)
 ASFUNCTIONBODY_ATOM(LoaderInfo,_getBytesLoaded)
 {
 	LoaderInfo* th=asAtomHandler::as<LoaderInfo>(obj);
-
-	asAtomHandler::setUInt(ret,sys,th->bytesLoaded);
+	// we always return bytesLoadedPublic to ensure it shows the same value as the last handled ProgressEvent
+	asAtomHandler::setUInt(ret,sys,th->bytesLoadedPublic);
 }
 
 ASFUNCTIONBODY_ATOM(LoaderInfo,_getBytesTotal)
@@ -465,7 +464,7 @@ void LoaderThread::execute()
 	sbuf = NULL;
 	if (source==URL) {
 		//Acquire the lock to ensure consistency in threadAbort
-		SpinlockLocker l(downloaderLock);
+		Locker l(downloaderLock);
 		if(downloader)
 			loaderInfo->getSystemState()->downloadManager->destroy(downloader);
 		downloader=nullptr;
@@ -484,18 +483,14 @@ void LoaderThread::execute()
 		}
 		return;
 	}
-	if (loader->getContentLoaderInfo().getPtr())
-		loader->getContentLoaderInfo()->setComplete();
 	if (loader.getPtr() && local_pt.getRootMovie() && local_pt.getRootMovie()->hasFinishedLoading())
 	{
 		if (local_pt.getRootMovie() != loader->getSystemState()->mainClip)
 		{
 			if (!local_pt.getRootMovie()->usesActionScript3)
-			{
 				local_pt.getRootMovie()->setIsInitialized(false);
-				local_pt.getRootMovie()->incRef();
-				loader->setContent(_MR(local_pt.getRootMovie()));
-			}
+			local_pt.getRootMovie()->incRef();
+			loader->setContent(_MR(local_pt.getRootMovie()));
 		}
 	}
 }
@@ -511,7 +506,7 @@ ASFUNCTIONBODY_ATOM(Loader,_constructor)
 ASFUNCTIONBODY_ATOM(Loader,_getContent)
 {
 	Loader* th=asAtomHandler::as<Loader>(obj);
-	SpinlockLocker l(th->spinlock);
+	Locker l(th->spinlock);
 	_NR<ASObject> res=th->content;
 	if(res.isNull())
 	{
@@ -533,7 +528,7 @@ ASFUNCTIONBODY_ATOM(Loader,_getContentLoaderInfo)
 ASFUNCTIONBODY_ATOM(Loader,close)
 {
 	Loader* th=asAtomHandler::as<Loader>(obj);
- 	SpinlockLocker l(th->spinlock);
+ 	Locker l(th->spinlock);
 	for (auto j=th->jobs.begin(); j!=th->jobs.end(); j++)
 		(*j)->threadAbort();
 }
@@ -624,7 +619,7 @@ void Loader::loadIntern(URLRequest* r, LoaderContext* context)
 	r->incRef();
 	LoaderThread *thread=new LoaderThread(_MR(r), _MR(this));
 
-	SpinlockLocker l(this->spinlock);
+	Locker l(this->spinlock);
 	this->jobs.push_back(thread);
 	this->getSystemState()->addJob(thread);
 }
@@ -658,7 +653,7 @@ ASFUNCTIONBODY_ATOM(Loader,loadBytes)
 	{
 		th->incRef();
 		LoaderThread *thread=new LoaderThread(_MR(bytes), _MR(th));
-		SpinlockLocker l(th->spinlock);
+		Locker l(th->spinlock);
 		th->jobs.push_back(thread);
 		sys->addJob(thread);
 	}
@@ -690,7 +685,7 @@ void Loader::unload()
 {
 	DisplayObject* content_copy = nullptr;
 	{
-		SpinlockLocker l(spinlock);
+		Locker l(spinlock);
 		for (auto j=jobs.begin(); j!=jobs.end(); j++)
 			(*j)->threadAbort();
 
@@ -747,7 +742,7 @@ ASFUNCTIONBODY_GETTER(Loader,uncaughtErrorEvents);
 
 void Loader::threadFinished(IThreadJob* finishedJob)
 {
-	SpinlockLocker l(spinlock);
+	Locker l(spinlock);
 	jobs.remove(finishedJob);
 	delete finishedJob;
 }
@@ -769,7 +764,7 @@ void Loader::setContent(_R<DisplayObject> o)
 	}
 
 	{
-		SpinlockLocker l(spinlock);
+		Locker l(spinlock);
 		content=o;
 		content->isLoadedRoot = true;
 		loaded=true;
@@ -1053,7 +1048,7 @@ _NR<DisplayObject> DisplayObjectContainer::hitTestImpl(_NR<DisplayObject> last, 
 		ret=(*j)->hitTest(_MR(this), localX,localY, mouseChildren ? type : GENERIC_HIT,interactiveObjectsOnly);
 		if(!ret.isNull())
 		{
-			if (interactiveObjectsOnly && !ret->is<InteractiveObject>())
+			if (interactiveObjectsOnly && !ret->is<InteractiveObject>() && mouseChildren)
 			{
 				if (this->is<RootMovieClip>())
 					continue;
@@ -1868,8 +1863,6 @@ bool MovieClip::AVM1HandleMouseEvent(EventDispatcher *dispatcher, MouseEvent *e)
 }
 void MovieClip::AVM1HandleEvent(EventDispatcher *dispatcher, Event* e)
 {
-	if (!this->isOnStage())
-		return;
 	std::map<uint32_t,asAtom> m;
 	if (dispatcher == this)
 	{
@@ -1881,6 +1874,8 @@ void MovieClip::AVM1HandleEvent(EventDispatcher *dispatcher, Event* e)
 			}
 			if (e->type == "enterFrame" && it->EventFlags.ClipEventEnterFrame)
 			{
+				if (!this->isOnStage())
+					return;
 				if (!this->state.explicit_FP)
 					ACTIONRECORD::executeActions(this,this->getCurrentFrame()->getAVM1Context(),it->actions,it->startactionpos,m);
 			}
@@ -1891,6 +1886,8 @@ void MovieClip::AVM1HandleEvent(EventDispatcher *dispatcher, Event* e)
 		}
 		if (e->type == "enterFrame")
 		{
+			if (!this->isOnStage())
+				return;
 			if (!this->state.explicit_FP)
 			{
 				asAtom func=asAtomHandler::invalidAtom;
@@ -1933,6 +1930,7 @@ void MovieClip::setupActions(const CLIPACTIONS &clipactions)
 	actions = clipactions;
 	if (this->actions.AllEventFlags.ClipEventMouseDown ||
 			this->actions.AllEventFlags.ClipEventMouseMove ||
+			this->actions.AllEventFlags.ClipEventPress ||
 			this->actions.AllEventFlags.ClipEventMouseUp)
 	{
 		setMouseEnabled(true);
@@ -2076,8 +2074,19 @@ ASFUNCTIONBODY_ATOM(MovieClip,AVM1CreateEmptyMovieClip)
 ASFUNCTIONBODY_ATOM(MovieClip,AVM1RemoveMovieClip)
 {
 	MovieClip* th=asAtomHandler::as<MovieClip>(obj);
-	if (th->getParent())
+	if (th->getParent() && !th->legacy)
+	{
+		if (th->name != BUILTIN_STRINGS::EMPTY)
+		{
+			multiname m(nullptr);
+			m.name_type=multiname::NAME_STRING;
+			m.name_s_id=th->name;
+			m.ns.emplace_back(sys,BUILTIN_STRINGS::EMPTY,NAMESPACE);
+			m.isAttribute = false;
+			th->getParent()->deleteVariableByMultiname(m);
+		}
 		th->getParent()->_removeChild(th);
+	}
 }
 ASFUNCTIONBODY_ATOM(MovieClip,AVM1Clear)
 {
@@ -2180,7 +2189,7 @@ ASFUNCTIONBODY_ATOM(MovieClip,AVM1LoadMovie)
 //	MovieClip* th=asAtomHandler::as<MovieClip>(obj);
 	tiny_string url;
 	tiny_string method;
-	ARG_UNPACK_ATOM(url)(method,"GET");
+	ARG_UNPACK_ATOM(url,"")(method,"GET");
 	LOG(LOG_NOT_IMPLEMENTED,"MovieClip.loadMovie not implemented "<<url<<" "<<method);
 }
 ASFUNCTIONBODY_ATOM(MovieClip,AVM1UnloadMovie)
@@ -3470,7 +3479,7 @@ ASFUNCTIONBODY_ATOM(Stage,_getStageVideos)
 
 _NR<InteractiveObject> Stage::getFocusTarget()
 {
-	SpinlockLocker l(focusSpinlock);
+	Locker l(focusSpinlock);
 	if (focus.isNull() || !focus->isOnStage() || !focus->isVisible())
 	{
 		incRef();
@@ -3484,7 +3493,7 @@ _NR<InteractiveObject> Stage::getFocusTarget()
 
 void Stage::setFocusTarget(_NR<InteractiveObject> f)
 {
-	SpinlockLocker l(focusSpinlock);
+	Locker l(focusSpinlock);
 	if (focus)
 		focus->lostFocus();
 	focus = f;

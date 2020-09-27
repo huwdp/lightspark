@@ -139,6 +139,7 @@
 #include "scripting/flash/globalization/collator.h"
 #include "scripting/flash/globalization/datetimeformatter.h"
 #include "scripting/flash/globalization/datetimestyle.h"
+#include "scripting/flash/globalization/collator.h"
 #include "scripting/flash/globalization/collatormode.h"
 #include "scripting/flash/globalization/datetimenamecontext.h"
 #include "scripting/flash/globalization/datetimenamestyle.h"
@@ -203,9 +204,9 @@ bool inStartupOrClose=true;
 bool lightspark::isVmThread()
 {
 #ifndef NDEBUG
-	return inStartupOrClose || GPOINTER_TO_INT(tls_get(&is_vm_thread));
+	return inStartupOrClose || GPOINTER_TO_INT(tls_get(is_vm_thread));
 #else
-	return GPOINTER_TO_INT(tls_get(&is_vm_thread));
+	return GPOINTER_TO_INT(tls_get(is_vm_thread));
 #endif
 }
 
@@ -292,6 +293,7 @@ void SymbolClassTag::execute(RootMovieClip* root) const
 		tiny_string className((const char*)Names[i],true);
 		if(Tags[i]==0)
 		{
+			root->hasMainClass=true;
 			root->incRef();
 			getVm(root->getSystemState())->addEvent(NullRef, _MR(new (root->getSystemState()->unaccountedMemory) BindClassEvent(_MR(root),className)));
 		}
@@ -815,6 +817,7 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("LastOperationStatus","flash.globalization",Class<LastOperationStatus>::getRef(m_sys));
 	builtin->registerBuiltin("CurrencyFormatter","flash.globalization",Class<CurrencyFormatter>::getRef(m_sys));
 	builtin->registerBuiltin("NumberFormatter","flash.globalization",Class<NumberFormatter>::getRef(m_sys));
+	builtin->registerBuiltin("Collator","flash.globalization",Class<Collator>::getRef(m_sys));
 	builtin->registerBuiltin("CollatorMode","flash.globalization",Class<CollatorMode>::getRef(m_sys));
 	builtin->registerBuiltin("DateTimeNameContext","flash.globalization",Class<DateTimeNameContext>::getRef(m_sys));
 	builtin->registerBuiltin("DateTimeNameStyle","flash.globalization",Class<DateTimeNameStyle>::getRef(m_sys));
@@ -1242,6 +1245,7 @@ multiname* ABCContext::getMultinameImpl(asAtom& n, ASObject* n2, unsigned int mi
 				tiny_string name = root->getSystemState()->getStringFromUniqueId(getString(td->name));
 				for(size_t i=0;i<m->param_types.size();++i)
 				{
+					ret->templateinstancenames.push_back(getMultiname(m->param_types[i],nullptr));
 					multiname_info* p=&constant_pool.multinames[m->param_types[i]];
 					name += "$";
 					tiny_string nsname;
@@ -1521,15 +1525,7 @@ ABCContext::ABCContext(_R<RootMovieClip> r, istream& in, ABCVm* vm):scriptsdecla
 		if(methods[method_body[i].method].body!=NULL)
 			throw ParseException("Duplicated body for function");
 		else
-		{
 			methods[method_body[i].method].body=&method_body[i];
-			methods[method_body[i].method].cc.locals = new asAtom[methods[method_body[i].method].body->local_count+1+2]; // +2, because we need two more elements to store result of optimized operations
-			methods[method_body[i].method].cc.stack = new asAtom[methods[method_body[i].method].body->max_stack+1];
-			methods[method_body[i].method].cc.scope_stack = new asAtom[methods[method_body[i].method].body->max_scope_depth];
-			methods[method_body[i].method].cc.scope_stack_dynamic = new bool[methods[method_body[i].method].body->max_scope_depth];
-			methods[method_body[i].method].cc.max_stackp=methods[method_body[i].method].cc.stack+methods[method_body[i].method].cc.mi->body->max_stack;
-			methods[method_body[i].method].cc.lastlocal = methods[method_body[i].method].cc.locals+methods[method_body[i].method].cc.mi->body->local_count+1+2;
-		}
 	}
 
 	hasRunScriptInit.resize(scripts.size(),false);
@@ -1589,11 +1585,7 @@ ABCVm::ABCVm(SystemState* s, MemoryAccount* m):m_sys(s),status(CREATED),isIdle(t
 
 void ABCVm::start()
 {
-#ifdef HAVE_NEW_GLIBMM_THREAD_API
-	t = Thread::create(sigc::bind(&Run,this));
-#else
-	t = Thread::create(sigc::bind(&Run,this),true);
-#endif
+	t = SDL_CreateThread(Run,"ABCVm",this);
 }
 
 void ABCVm::shutdown()
@@ -1606,7 +1598,7 @@ void ABCVm::shutdown()
 		sem_event_cond.signal();
 		event_queue_mutex.unlock();
 		//Wait for the vm thread
-		t->join();
+		SDL_WaitThread(t,0);
 		status=TERMINATED;
 		signalEventWaiters();
 	}
@@ -1652,7 +1644,11 @@ void ABCVm::publicHandleEvent(EventDispatcher* dispatcher, _R<Event> event)
 	if (dispatcher && dispatcher->is<RootMovieClip>() && dispatcher->as<RootMovieClip>()->isWaitingForParser() && event->type == "enterFrame")
 		return;
 	if (event->is<ProgressEvent>())
+	{
 		event->as<ProgressEvent>()->accesmutex.lock();
+		if (dispatcher->is<LoaderInfo>()) // ensure that the LoaderInfo reports the same number as the ProgressEvent for bytesLoaded
+			dispatcher->as<LoaderInfo>()->setBytesLoadedPublic(event->as<ProgressEvent>()->bytesLoaded);
+	}
 
 	std::deque<DisplayObject*> parents;
 	//Only set the default target is it's not overridden
@@ -1800,6 +1796,7 @@ void ABCVm::publicHandleEvent(EventDispatcher* dispatcher, _R<Event> event)
 
 void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 {
+	//LOG(LOG_INFO,"handleEvent:"<<e.second->type);
 	e.second->check();
 	if(!e.first.isNull())
 		publicHandleEvent(e.first.getPtr(), e.second);
@@ -1927,7 +1924,7 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 			}
 			case IDLE_EVENT:
 			{
-				Mutex::Lock l(event_queue_mutex);
+				Locker l(event_queue_mutex);
 				while (!idleevents_queue.empty())
 				{
 					events_queue.push_back(idleevents_queue.front());
@@ -1979,6 +1976,7 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 	if(e.second->is<WaitableEvent>())
 		e.second->as<WaitableEvent>()->signal();
 	RELEASE_WRITE(e.second->queued,false);
+	//LOG(LOG_INFO,"handleEvent done:"<<e.second->type);
 }
 
 bool ABCVm::prependEvent(_NR<EventDispatcher> obj ,_R<Event> ev, bool force)
@@ -1993,7 +1991,7 @@ bool ABCVm::prependEvent(_NR<EventDispatcher> obj ,_R<Event> ev, bool force)
 		return true;
 	}
 
-	Mutex::Lock l(event_queue_mutex);
+	Locker l(event_queue_mutex);
 
 	//If the system should terminate new events are not accepted
 	if(shuttingdown)
@@ -2027,7 +2025,7 @@ bool ABCVm::addEvent(_NR<EventDispatcher> obj ,_R<Event> ev)
 	}
 
 
-	Mutex::Lock l(event_queue_mutex);
+	Locker l(event_queue_mutex);
 
 	//If the system should terminate new events are not accepted
 	if(shuttingdown)
@@ -2045,7 +2043,7 @@ bool ABCVm::addEvent(_NR<EventDispatcher> obj ,_R<Event> ev)
 }
 void ABCVm::addIdleEvent(_NR<EventDispatcher> obj ,_R<Event> ev)
 {
-	Mutex::Lock l(event_queue_mutex);
+	Locker l(event_queue_mutex);
 	//If the system should terminate new events are not accepted
 	if(shuttingdown)
 		return;
@@ -2322,15 +2320,16 @@ void ABCContext::runScriptInit(unsigned int i, asAtom &g)
 	LOG(LOG_CALLS, "Finished script init for script " << i );
 }
 
-void ABCVm::Run(ABCVm* th)
+int ABCVm::Run(void* d)
 {
+	ABCVm* th = (ABCVm*)d;
 	//Spin wait until the VM is aknowledged by the SystemState
 	setTLSSys(th->m_sys);
 	while(getVm(th->m_sys)!=th)
 		;
 
 	/* set TLS variable for isVmThread() */
-        tls_set(&is_vm_thread, GINT_TO_POINTER(1));
+        tls_set(is_vm_thread, GINT_TO_POINTER(1));
 #ifndef NDEBUG
 	inStartupOrClose= false;
 #endif
@@ -2462,6 +2461,7 @@ void ABCVm::Run(ABCVm* th)
 #ifndef NDEBUG
 	inStartupOrClose= true;
 #endif
+	return 0;
 }
 
 /* This breaks the lock on all enqueued events to prevent deadlocking */
@@ -2472,7 +2472,7 @@ void ABCVm::signalEventWaiters()
 	while(!events_queue.empty())
 	{
 		pair<_NR<EventDispatcher>,_R<Event>> e=events_queue.front();
-                events_queue.pop_front();
+		events_queue.pop_front();
 		if(e.second->is<WaitableEvent>())
 			e.second->as<WaitableEvent>()->signal();
 	}

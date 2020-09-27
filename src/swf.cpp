@@ -58,19 +58,19 @@ using namespace lightspark;
 DEFINE_AND_INITIALIZE_TLS(tls_system);
 SystemState* lightspark::getSys()
 {
-	SystemState* ret = (SystemState*)tls_get(&tls_system);
+	SystemState* ret = (SystemState*)tls_get(tls_system);
 	return ret;
 }
 
 void lightspark::setTLSSys(SystemState* sys)
 {
-        tls_set(&tls_system,sys);
+        tls_set(tls_system,sys);
 }
 
 DEFINE_AND_INITIALIZE_TLS(parse_thread_tls);
 ParseThread* lightspark::getParseThread()
 {
-	ParseThread* pt = (ParseThread*)tls_get(&parse_thread_tls);
+	ParseThread* pt = (ParseThread*)tls_get(parse_thread_tls);
 	assert(pt);
 	return pt;
 }
@@ -78,11 +78,11 @@ ParseThread* lightspark::getParseThread()
 DEFINE_AND_INITIALIZE_TLS(tls_worker);
 void lightspark::setTLSWorker(ASWorker* worker)
 {
-	tls_set(&tls_worker,worker);
+	tls_set(tls_worker,worker);
 }
 ASWorker* lightspark::getWorker()
 {
-	return (ASWorker*)tls_get(&tls_worker);
+	return (ASWorker*)tls_get(tls_worker);
 }
 
 
@@ -94,6 +94,7 @@ RootMovieClip::RootMovieClip(_NR<LoaderInfo> li, _NR<ApplicationDomain> appDomai
 	subtype=SUBTYPE_ROOTMOVIECLIP;
 	loaderInfo=li;
 	hasSymbolClass=false;
+	hasMainClass=false;
 	usesActionScript3=false;
 }
 
@@ -197,14 +198,14 @@ void SystemState::staticDeinit()
 static const char* builtinStrings[] = {"any", "void", "prototype", "Function", "__AS3__.vec","Class", "http://adobe.com/AS3/2006/builtin","http://www.w3.org/XML/1998/namespace","xml","toString","valueOf","length","constructor",
 									   "_target","this","_root","_parent","_global","super",
 									   "onEnterFrame","onMouseMove","onMouseDown","onMouseUp","onPress","onRelease","onReleaseOutside","onMouseWheel","onLoad",
-									   "object","undefined","boolean","number","string","function"
+									   "object","undefined","boolean","number","string","function","onRollOver","onRollOut"
 									  };
 
 extern uint32_t asClassCount;
 
 SystemState::SystemState(uint32_t fileSize, FLASH_MODE mode):
 	terminated(0),renderRate(0),error(false),shutdown(false),firsttick(true),
-	renderThread(nullptr),inputThread(nullptr),engineData(nullptr),mainThread(0),dumpedSWFPathAvailable(0),
+	renderThread(nullptr),inputThread(nullptr),engineData(nullptr),dumpedSWFPathAvailable(0),
 	vmVersion(VMNONE),childPid(0),
 	parameters(NullRef),
 	invalidateQueueHead(NullRef),invalidateQueueTail(NullRef),lastUsedStringId(0),lastUsedNamespaceId(0x7fffffff),
@@ -250,8 +251,6 @@ SystemState::SystemState(uint32_t fileSize, FLASH_MODE mode):
 	// it seems Adobe ignores any locale date settings
 	setlocale(LC_TIME, "C");
 	setlocale(LC_NUMERIC, "POSIX");
-	
-	mainThread = Thread::self();
 
 	unaccountedMemory = allocateMemoryAccount("Unaccounted");
 	tagsMemory = allocateMemoryAccount("Tags");
@@ -1131,7 +1130,7 @@ void SystemState::removeJob(ITickJob* job)
 
 ThreadProfile* SystemState::allocateProfiler(const lightspark::RGB& color)
 {
-	SpinlockLocker l(profileDataSpinlock);
+	Locker l(profileDataSpinlock);
 	profilingData.push_back(new ThreadProfile(color,100,engineData));
 	ThreadProfile* ret=profilingData.back();
 	return ret;
@@ -1139,7 +1138,7 @@ ThreadProfile* SystemState::allocateProfiler(const lightspark::RGB& color)
 
 void SystemState::addToInvalidateQueue(_R<DisplayObject> d)
 {
-	SpinlockLocker l(invalidateQueueLock);
+	Locker l(invalidateQueueLock);
 	//Check if the object is already in the queue
 	if(!d->invalidateQueueNext.isNull() || d==invalidateQueueTail)
 		return;
@@ -1154,7 +1153,7 @@ void SystemState::addToInvalidateQueue(_R<DisplayObject> d)
 
 void SystemState::flushInvalidationQueue()
 {
-	SpinlockLocker l(invalidateQueueLock);
+	Locker l(invalidateQueueLock);
 	_NR<DisplayObject> cur=invalidateQueueHead;
 	if (!cur.isNull())
 	{
@@ -1410,7 +1409,7 @@ void ParseThread::parseSWFHeader(RootMovieClip *root, UI8 ver)
 
 void ParseThread::execute()
 {
-	tls_set(&parse_thread_tls,this);
+	tls_set(parse_thread_tls,this);
 	try
 	{
 		UI8 Signature[4];
@@ -1431,7 +1430,7 @@ void ParseThread::execute()
 	}
 	catch(ParseException& e)
 	{
-		SpinlockLocker l(objectSpinlock);
+		Locker l(objectSpinlock);
 		parsedObject = NullRef;
 		// Set system error only for main SWF. Loader classes
 		// handle error for loaded SWFs.
@@ -1695,7 +1694,7 @@ void ParseThread::parseBitmap()
 
 	_NR<Bitmap> tmp=_MNR(Class<Bitmap>::getInstanceS(loader->getSystemState(),li, &f, fileType));
 	{
-		SpinlockLocker l(objectSpinlock);
+		Locker l(objectSpinlock);
 		parsedObject=tmp;
 	}
 	if (li.getPtr())
@@ -1704,13 +1703,13 @@ void ParseThread::parseBitmap()
 
 _NR<DisplayObject> ParseThread::getParsedObject()
 {
-	SpinlockLocker l(objectSpinlock);
+	Locker l(objectSpinlock);
 	return parsedObject;
 }
 
 void ParseThread::setRootMovie(RootMovieClip *root)
 {
-	SpinlockLocker l(objectSpinlock);
+	Locker l(objectSpinlock);
 	assert(root);
 	root->incRef();
 	parsedObject=_MNR(root);
@@ -1723,7 +1722,7 @@ RootMovieClip* ParseThread::getRootMovie() const
 
 void ParseThread::threadAbort()
 {
-	SpinlockLocker l(objectSpinlock);
+	Locker l(objectSpinlock);
 	if(parsedObject.isNull())
 		return;
 	RootMovieClip* root=getRootMovie();
@@ -1773,11 +1772,11 @@ void RootMovieClip::commitFrame(bool another)
 	if(getFramesLoaded()==1 && frameRate!=0)
 	{
 		SystemState* sys = getSys();
-		if(this==sys->mainClip)
+		if(this==sys->mainClip || !hasMainClass)
 		{
 			/* now the frameRate is available and all SymbolClass tags have created their classes */
-			// in AS3 this is added to the stage after the construction of the main object is completed
-			if (!usesActionScript3)
+			// in AS3 this is added to the stage after the construction of the main object is completed (if a main object exists)
+			if (!usesActionScript3 || !hasMainClass)
 			{
 				while (!getVm(sys)->hasEverStarted()) // ensure that all builtin classes are defined
 					compat_msleep(10);
@@ -1806,7 +1805,8 @@ void RootMovieClip::constructionComplete()
 }
 void RootMovieClip::afterConstruction()
 {
-	this->setOnStage(true,true);
+	if (this==getSystemState()->mainClip)
+		this->setOnStage(true,true);
 	DisplayObject::afterConstruction();
 	checkFrameScriptToExecute();
 }
@@ -1830,14 +1830,14 @@ void RootMovieClip::setBackground(const RGB& bg)
 /* called in parser's thread context */
 void RootMovieClip::addToDictionary(DictionaryTag* r)
 {
-	SpinlockLocker l(dictSpinlock);
+	Locker l(dictSpinlock);
 	dictionary[r->getId()] = r;
 }
 
 /* called in vm's thread context */
 DictionaryTag* RootMovieClip::dictionaryLookup(int id)
 {
-	SpinlockLocker l(dictSpinlock);
+	Locker l(dictSpinlock);
 	auto it = dictionary.find(id);
 	if(it==dictionary.end())
 	{
@@ -1849,7 +1849,7 @@ DictionaryTag* RootMovieClip::dictionaryLookup(int id)
 }
 DictionaryTag* RootMovieClip::dictionaryLookupByName(uint32_t nameID)
 {
-	SpinlockLocker l(dictSpinlock);
+	Locker l(dictSpinlock);
 	auto it = dictionary.begin();
 	for(;it!=dictionary.end();++it)
 	{
@@ -1938,7 +1938,7 @@ void SystemState::tick()
 {
 	if (showProfilingData)
 	{
-		SpinlockLocker l(profileDataSpinlock);
+		Locker l(profileDataSpinlock);
 		list<ThreadProfile*>::iterator it=profilingData.begin();
 		for(;it!=profilingData.end();++it)
 			(*it)->tick();

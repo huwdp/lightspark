@@ -45,7 +45,7 @@ namespace lightspark
 enum BUILTIN_STRINGS { EMPTY=0, STRING_WILDCARD='*', ANY=BUILTIN_STRINGS_CHAR_MAX, VOID, PROTOTYPE, STRING_FUNCTION,STRING_AS3VECTOR,STRING_CLASS,STRING_AS3NS,STRING_NAMESPACENS,STRING_XML,STRING_TOSTRING,STRING_VALUEOF,STRING_LENGTH,STRING_CONSTRUCTOR
 					   ,STRING_AVM1_TARGET,STRING_THIS,STRING_AVM1_ROOT,STRING_AVM1_PARENT,STRING_AVM1_GLOBAL,STRING_SUPER
 					   ,STRING_ONENTERFRAME,STRING_ONMOUSEMOVE,STRING_ONMOUSEDOWN,STRING_ONMOUSEUP,STRING_ONPRESS,STRING_ONRELEASE,STRING_ONRELEASEOUTSIDE,STRING_ONMOUSEWHEEL, STRING_ONLOAD
-					   ,STRING_OBJECT,STRING_UNDEFINED,STRING_BOOLEAN,STRING_NUMBER,STRING_STRING,STRING_FUNCTION_LOWERCASE
+					   ,STRING_OBJECT,STRING_UNDEFINED,STRING_BOOLEAN,STRING_NUMBER,STRING_STRING,STRING_FUNCTION_LOWERCASE,STRING_ONROLLOVER,STRING_ONROLLOUT
 					   ,LAST_BUILTIN_STRING };
 enum BUILTIN_NAMESPACES { EMPTY_NS=0, AS3_NS };
 
@@ -412,6 +412,7 @@ struct multiname: public memory_reporter
 	};
 	std::vector<nsNameAndKind, reporter_allocator<nsNameAndKind>> ns;
 	const Type* cachedType;
+	std::vector<multiname*> templateinstancenames;
 	enum NAME_TYPE {NAME_STRING,NAME_INT,NAME_UINT,NAME_NUMBER,NAME_OBJECT};
 	NAME_TYPE name_type:3;
 	bool isAttribute:1;
@@ -420,7 +421,7 @@ struct multiname: public memory_reporter
 	bool hasBuiltinNS:1;
 	bool hasGlobalNS:1;
 	bool isInteger:1;
-	multiname(MemoryAccount* m):name_s_id(UINT32_MAX),name_o(NULL),ns(reporter_allocator<nsNameAndKind>(m)),cachedType(NULL),name_type(NAME_OBJECT),isAttribute(false),isStatic(true),hasEmptyNS(true),hasBuiltinNS(false),hasGlobalNS(true),isInteger(false)
+	multiname(MemoryAccount* m):name_s_id(UINT32_MAX),name_o(nullptr),ns(reporter_allocator<nsNameAndKind>(m)),cachedType(nullptr),name_type(NAME_OBJECT),isAttribute(false),isStatic(true),hasEmptyNS(true),hasBuiltinNS(false),hasGlobalNS(true),isInteger(false)
 	{
 	}
 	
@@ -444,8 +445,8 @@ struct multiname: public memory_reporter
 	void setName(union asAtom &n, SystemState *sys);
 	void resetNameIfObject();
 	inline bool isQName() const { return ns.size() == 1; }
-	bool toUInt(SystemState *sys, uint32_t& out, bool acceptStringFractions=false, bool* isNumber=NULL) const;
-	inline bool isEmpty() const { return name_type == NAME_OBJECT && name_o == NULL;}
+	bool toUInt(SystemState *sys, uint32_t& out, bool acceptStringFractions=false, bool* isNumber=nullptr) const;
+	inline bool isEmpty() const { return name_type == NAME_OBJECT && name_o == nullptr;}
 };
 
 class FLOAT 
@@ -539,8 +540,8 @@ public:
 class RGB
 {
 public:
-	RGB(){};
-	RGB(int r,int g, int b):Red(r),Green(g),Blue(b){};
+	RGB(){}
+	RGB(int r,int g, int b):Red(r),Green(g),Blue(b){}
 	RGB(uint32_t color):Red((color>>16)&0xFF),Green((color>>8)&0xFF),Blue(color&0xFF){}
 	//Parses a color from hex triplet string #RRGGBB
 	RGB(const tiny_string& colorstr);

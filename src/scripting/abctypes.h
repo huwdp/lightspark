@@ -262,25 +262,11 @@ struct method_info_simple
 	std::vector<option_detail> options;
 	std::vector<u30> param_names;
 };
-#define OPCODE_SIZE 10 // number of bits used for opcodes
+typedef void (*abc_function)(struct call_context*);
+
 struct preloadedcodedata
 {
-	union
-	{
-		struct
-		{
-			// this is used to automatically extract the jump position for a branch (24 bit signed integer)
-#if G_BYTE_ORDER == G_BIG_ENDIAN
-			signed int jump:32-OPCODE_SIZE;
-			uint16_t opcode:OPCODE_SIZE;
-#else
-			uint16_t opcode:OPCODE_SIZE;
-			signed int jump:32-OPCODE_SIZE;
-#endif
-		} jumpdata;
-		int32_t idata;
-		uint32_t data;
-	};
+	abc_function func;
 	union
 	{
 		ASObject* cacheobj1;
@@ -295,6 +281,11 @@ struct preloadedcodedata
 		multiname* cachedmultiname2;
 		variable* cachedvar2;
 		asAtom* arg2_constant;
+		struct
+		{
+			uint16_t pos;
+			uint16_t flags;
+		} local2;
 		uint32_t local_pos2;
 		int32_t arg2_int;
 		uint32_t arg2_uint;
@@ -302,17 +293,27 @@ struct preloadedcodedata
 	union
 	{
 		ASObject* cacheobj3;
+		multiname* cachedmultiname3;
 		asAtom* arg3_constant;
-		uint32_t local_pos3;
+		struct
+		{
+			uint16_t pos;
+			uint16_t flags;
+		} local3;
 		int32_t arg3_int;
 		uint32_t arg3_uint;
 	};
-	preloadedcodedata(uint32_t d):data(d),cacheobj1(nullptr),cacheobj2(nullptr),cacheobj3(nullptr){}
+	preloadedcodedata():func(nullptr),cacheobj1(nullptr),cacheobj2(nullptr),cacheobj3(nullptr) {}
+};
+struct localconstantslot
+{
+	uint32_t local_pos;
+	uint32_t slot_number;
 };
 
 struct method_body_info
 {
-	method_body_info():hit_count(0),codeStatus(ORIGINAL){}
+	method_body_info():localresultcount(0),hit_count(0),codeStatus(ORIGINAL){}
 	u30 method;
 	u30 max_stack;
 	u30 local_count;
@@ -322,12 +323,17 @@ struct method_body_info
 	std::vector<exception_info_abc> exceptions;
 	u30 trait_count;
 	std::vector<traits_info> traits;
+	uint16_t localresultcount;
 	//The hit_count belongs here, since it is used to manipulate the code
 	uint16_t hit_count;
+	uint16_t returnvaluepos;
 	//The code status
 	enum CODE_STATUS { ORIGINAL = 0, USED, OPTIMIZED, JITTED, PRELOADED };
 	CODE_STATUS codeStatus;
+	// list of local/slot pairs that were optimized away
+	std::vector<localconstantslot> localconstantslots;
 	std::vector<preloadedcodedata> preloadedcode;
+	inline uint16_t getReturnValuePos() const { return returnvaluepos; }
 };
 
 std::istream& operator>>(std::istream& in, u8& v);
