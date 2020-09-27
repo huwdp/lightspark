@@ -144,6 +144,7 @@
 #include "scripting/flash/globalization/datetimenamestyle.h"
 #include "scripting/flash/globalization/nationaldigitstype.h"
 #include "scripting/flash/globalization/lastoperationstatus.h"
+#include "scripting/flash/globalization/localeid.h"
 #include "scripting/flash/globalization/currencyformatter.h"
 #include "scripting/flash/globalization/numberformatter.h"
 #include "scripting/flash/globalization/stringtools.h"
@@ -818,6 +819,7 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("DateTimeNameContext","flash.globalization",Class<DateTimeNameContext>::getRef(m_sys));
 	builtin->registerBuiltin("DateTimeNameStyle","flash.globalization",Class<DateTimeNameStyle>::getRef(m_sys));
 	builtin->registerBuiltin("NationalDigitsType","flash.globalization",Class<NationalDigitsType>::getRef(m_sys));
+	builtin->registerBuiltin("LocaleID","flash.globalization",Class<LocaleID>::getRef(m_sys));
 	
 	builtin->registerBuiltin("ClipboardFormats","flash.desktop",Class<ClipboardFormats>::getRef(m_sys));
 	builtin->registerBuiltin("ClipboardTransferMode","flash.desktop",Class<ClipboardTransferMode>::getRef(m_sys));

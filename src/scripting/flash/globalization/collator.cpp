@@ -18,6 +18,7 @@
 **************************************************************************/
 
 #include "scripting/flash/globalization/collator.h"
+#include "backends/locale.h"
 #include "scripting/class.h"
 #include "scripting/argconv.h"
 #include <iomanip>
@@ -26,7 +27,7 @@ using namespace lightspark;
 
 void Collator::sinit(Class_base* c)
 {
-	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED|CLASS_FINAL);
+	CLASS_SETUP(c, ASObject, _constructor, CLASS_SEALED|CLASS_FINAL);
 
     REGISTER_GETTER(c, actualLocaleIDName);
     REGISTER_GETTER_SETTER(c, ignoreCase);
@@ -46,65 +47,19 @@ void Collator::sinit(Class_base* c)
 ASFUNCTIONBODY_ATOM(Collator,_constructor)
 {
 	Collator* th =asAtomHandler::as<Collator>(obj);
-
 	ARG_UNPACK_ATOM(th->requestedLocaleIDName);
 	ARG_UNPACK_ATOM(th->initialMode);
-
-	try
+	if (sys->localeManager->isLocaleAvailableOnSystem(th->requestedLocaleIDName.raw_buf()))
 	{
-		th->currlocale = std::locale(th->requestedLocaleIDName.raw_buf());
+		std::string localeName = sys->localeManager->getSystemLocaleName(th->requestedLocaleIDName.raw_buf());
+		th->currlocale = std::locale(localeName);
 		th->actualLocaleIDName = th->requestedLocaleIDName;
 		th->lastOperationStatus="noError";
 	}
-	catch (std::runtime_error& e)
+	else
 	{
-		uint32_t pos = th->requestedLocaleIDName.find("-");
-		if(pos != tiny_string::npos)
-		{
-			tiny_string r("_");
-			tiny_string l = th->requestedLocaleIDName.replace(pos,1,r);
-			try
-			{
-				// try with "_" instead of "-"
-				th->currlocale = std::locale(l.raw_buf());
-				th->actualLocaleIDName = th->requestedLocaleIDName;
-				th->lastOperationStatus="noError";
-			}
-			catch (std::runtime_error& e)
-			{
-				try
-				{
-					// try appending ".UTF-8"
-					l += ".UTF-8";
-					th->currlocale = std::locale(l.raw_buf());
-					th->actualLocaleIDName = th->requestedLocaleIDName;
-					th->lastOperationStatus="noError";
-				}
-				catch (std::runtime_error& e)
-				{
-					th->lastOperationStatus="usingDefaultWarning";
-					LOG(LOG_ERROR,"unknown locale:"<<th->requestedLocaleIDName<<" "<<e.what());
-				}
-			}
-		}
-		else
-		{
-			try
-			{
-				// try appending ".UTF-8"
-				th->requestedLocaleIDName += ".UTF-8";
-				th->currlocale = std::locale(th->requestedLocaleIDName.raw_buf());
-				th->actualLocaleIDName = th->requestedLocaleIDName;
-				th->lastOperationStatus="noError";
-			}
-			catch (std::runtime_error& e)
-			{
-				th->lastOperationStatus="usingDefaultWarning";
-				LOG(LOG_ERROR,"unknown locale:"<<th->requestedLocaleIDName<<" "<<e.what());
-			}
-		}
+		th->lastOperationStatus="usingDefaultWarning";
 	}
-    th->lastOperationStatus = "no_error";
 }
 
 ASFUNCTIONBODY_GETTER(Collator, actualLocaleIDName);
@@ -120,7 +75,7 @@ ASFUNCTIONBODY_GETTER(Collator, requestedLocaleIDName);
 bool Collator::isSymbol(char character)
 {
 	// Space is a symbol in this API
-	if (isspace(character) || character == ' ' || character == 32) 
+	if (isspace(character) || character == 32) 
 	{
 		return true;
 	}
@@ -128,7 +83,6 @@ bool Collator::isSymbol(char character)
 	{
 		return true;
 	}
-	// Check for more symbols to add!!!
 	return iswcntrl(character);
 }
 
@@ -141,47 +95,48 @@ int Collator::compare(
 	bool ignoreKanaType,
 	bool ignoreSymbols)
 {
-	string::iterator string1It = string1.begin();
-    string::iterator string2It = string2.begin();
+	string::iterator s1It= string1.begin();
+    string::iterator s2It = string2.begin();
+	
+	// Build first string
 	string s1 = "";
+	while (s1It!= string1.end())
+	{
+		if (ignoreSymbols && isSymbol((*s1It)))
+		{
+			// Do nothing
+		}
+		else if (ignoreCase)
+		{
+			s1.push_back(std::tolower((*s1It)));
+		}
+		else
+		{
+			s1.push_back((*s1It));
+		}
+		s1It++;
+	}
+
+	// Build second string
 	string s2 = "";
-	while (string1It != string1.end())
+	while (s2It != string2.end())
 	{
-		char char1 = (*string1It);
-		if (ignoreSymbols && isSymbol(char1))
+		if (ignoreSymbols && isSymbol((*s2It)))
 		{
-
+			// Do nothing
 		}
 		else if (ignoreCase)
 		{
-			char1 = std::tolower(char1);
-			s1.push_back(char1);
+			s2.push_back(std::tolower((*s2It)));
 		}
 		else
 		{
-			s1.push_back(char1);
+			s2.push_back((*s2It));
 		}
-		string1It++;
+		s2It++;
 	}
 
-	while (string2It != string2.end())
-	{
-		char char2 = (*string2It);
-		if (ignoreSymbols && isSymbol(char2))
-		{
-
-		}
-		else if (ignoreCase)
-		{
-			char2 = std::tolower(char2);
-			s2.push_back(char2);
-		}
-		else
-		{
-			s2.push_back(char2);
-		}
-		string2It++;
-	}
+	// Compare results
 	int result = s2.compare(s1);
 	if (result > 0)
 	{
@@ -203,29 +158,26 @@ bool Collator::equals(
 	bool ignoreKanaType,
 	bool ignoreSymbols)
 {
-	string::iterator string1It = string1.begin();
-	string::iterator string2It = string2.begin();
-	
-	while (string1It != string1.end() && string2It != string2.end())
+	string::iterator s1It = string1.begin();
+	string::iterator s2It = string2.begin();
+	while (s1It!= string1.end() && s2It != string2.end())
 	{
-		gunichar char1 = (*string1It);
-		gunichar char2 = (*string2It);
-
+		char char1 = (*s1It);
+		char char2 = (*s2It);
 		if (ignoreCase)
 		{
 			char1 = std::tolower(char1);
 			char2 = std::tolower(char2);
 		}
-
 		if (ignoreSymbols && (isSymbol(char1) || isSymbol(char2)))
 		{
 			if (isSymbol(char1))
 			{
-				++string1It;
+				++s1It;
 			}
 			if (isSymbol(char2))
 			{
-				++string2It;
+				++s2It;
 			}
 		}
 		else
@@ -234,15 +186,15 @@ bool Collator::equals(
 			{
 				return false;
 			}
-			++string1It;
-			++string2It;
+			++s1It;
+			++s2It;
 		}
 	}
-	if (string1It != string1.end())
+	if (s1It!= string1.end())
 	{
 		return false;
 	}
-	if (string2It != string2.end())
+	if (s2It != string2.end())
 	{
 		return false;
 	}
@@ -285,7 +237,11 @@ ASFUNCTIONBODY_ATOM(Collator,compare)
 		}
 		else
 		{
-			value = th->compare(s1, s2, th->ignoreCase, th->ignoreCharacterWidth, th->ignoreDiacritics, th->ignoreKanaType, th->ignoreSymbols);
+			value = th->compare(s1, s2, th->ignoreCase,
+				th->ignoreCharacterWidth,
+				th->ignoreDiacritics,
+				th->ignoreKanaType,
+				th->ignoreSymbols);
 		}
 		ret = asAtomHandler::fromInt(value);
 		th->lastOperationStatus = "noError";
@@ -293,7 +249,7 @@ ASFUNCTIONBODY_ATOM(Collator,compare)
     catch (std::runtime_error& e)
     {
 		th->lastOperationStatus="usingDefaultWarning";
-		LOG(LOG_ERROR,"unknown locale:"<<th->requestedLocaleIDName<<" "<<e.what());
+		LOG(LOG_ERROR,e.what());
     }
 }
 
@@ -333,7 +289,11 @@ ASFUNCTIONBODY_ATOM(Collator,equals)
 		}
 		else
 		{
-			value = th->equals(s1, s2, th->ignoreCase, th->ignoreCharacterWidth, th->ignoreDiacritics, th->ignoreKanaType, th->ignoreSymbols);
+			value = th->equals(s1, s2, th->ignoreCase,
+				th->ignoreCharacterWidth,
+				th->ignoreDiacritics,
+				th->ignoreKanaType,
+				th->ignoreSymbols);
 		}
 		ret = asAtomHandler::fromBool(value);
 		th->lastOperationStatus = "noError";
@@ -341,11 +301,20 @@ ASFUNCTIONBODY_ATOM(Collator,equals)
     catch (std::runtime_error& e)
     {
 		th->lastOperationStatus="usingDefaultWarning";
-		LOG(LOG_ERROR,"unknown locale:"<<th->requestedLocaleIDName<<" "<<e.what());
+		LOG(LOG_ERROR,e.what());
     }
 }
 
 ASFUNCTIONBODY_ATOM(Collator,getAvailableLocaleIDNames)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"Collator.getAvailableLocaleIDNames is not implemented.");
+	Collator* th = asAtomHandler::as<Collator>(obj);
+	Array* res=Class<Array>::getInstanceSNoArgs(sys);
+	std::vector<std::string> localeIds = sys->localeManager->getAvailableLocaleIDNames();
+	for (std::vector<std::string>::iterator it = localeIds.begin(); it != localeIds.end(); ++it)
+	{
+		tiny_string value = (*it);
+		res->push(asAtomHandler::fromObject(abstract_s(sys, value)));
+	}
+	th->lastOperationStatus="noError";
+	ret = asAtomHandler::fromObject(res);
 }

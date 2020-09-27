@@ -18,6 +18,7 @@
 **************************************************************************/
 
 #include "scripting/flash/globalization/currencyformatter.h"
+#include "backends/locale.h"
 #include "scripting/class.h"
 #include "scripting/argconv.h"
 
@@ -61,63 +62,18 @@ void CurrencyFormatter::sinit(Class_base* c)
 ASFUNCTIONBODY_ATOM(CurrencyFormatter,_constructor)
 {
 	CurrencyFormatter* th =asAtomHandler::as<CurrencyFormatter>(obj);
-
 	th->fractionalDigits = 0;
-
 	ARG_UNPACK_ATOM(th->requestedLocaleIDName);
-	try
+	if (sys->localeManager->isLocaleAvailableOnSystem(th->requestedLocaleIDName.raw_buf()))
 	{
-		th->currlocale = std::locale(th->requestedLocaleIDName.raw_buf());
+		std::string localeName = sys->localeManager->getSystemLocaleName(th->requestedLocaleIDName.raw_buf());
+		th->currlocale = std::locale(localeName);
 		th->actualLocaleIDName = th->requestedLocaleIDName;
 		th->lastOperationStatus="noError";
 	}
-	catch (std::runtime_error& e)
+	else
 	{
-		uint32_t pos = th->requestedLocaleIDName.find("-");
-		if(pos != tiny_string::npos)
-		{
-			tiny_string r("_");
-			tiny_string l = th->requestedLocaleIDName.replace(pos,1,r);
-			try
-			{
-				// try with "_" instead of "-"
-				th->currlocale = std::locale(l.raw_buf());
-				th->actualLocaleIDName = th->requestedLocaleIDName;
-				th->lastOperationStatus="noError";
-			}
-			catch (std::runtime_error& e)
-			{
-				try
-				{
-					// try appending ".UTF-8"
-					l += ".UTF-8";
-					th->currlocale = std::locale(l.raw_buf());
-					th->actualLocaleIDName = th->requestedLocaleIDName;
-					th->lastOperationStatus="noError";
-				}
-				catch (std::runtime_error& e)
-				{
-					th->lastOperationStatus="usingDefaultWarning";
-					LOG(LOG_ERROR,"unknown locale:"<<th->requestedLocaleIDName<<" "<<e.what());
-				}
-			}
-		}
-		else
-		{
-			try
-			{
-				// try appending ".UTF-8"
-				th->requestedLocaleIDName += ".UTF-8";
-				th->currlocale = std::locale(th->requestedLocaleIDName.raw_buf());
-				th->actualLocaleIDName = th->requestedLocaleIDName;
-				th->lastOperationStatus="noError";
-			}
-			catch (std::runtime_error& e)
-			{
-				th->lastOperationStatus="usingDefaultWarning";
-				LOG(LOG_ERROR,"unknown locale:"<<th->requestedLocaleIDName<<" "<<e.what());
-			}
-		}
+		th->lastOperationStatus="usingDefaultWarning";
 	}
 }
 
@@ -159,8 +115,16 @@ ASFUNCTIONBODY_ATOM(CurrencyFormatter,formattingWithCurrencySymbolIsSafe)
 
 ASFUNCTIONBODY_ATOM(CurrencyFormatter,getAvailableLocaleIDNames)
 {
-	LOG(LOG_NOT_IMPLEMENTED,"CurrencyFormatter.getAvailableLocaleIDNames is not implemented.");
-	// Returns a vector of supported LocateIDNames.
+	CurrencyFormatter* th =asAtomHandler::as<CurrencyFormatter>(obj);
+	Array* res=Class<Array>::getInstanceSNoArgs(sys);
+	std::vector<std::string> localeIds = sys->localeManager->getAvailableLocaleIDNames();
+	for (std::vector<std::string>::iterator it = localeIds.begin(); it != localeIds.end(); ++it)
+	{
+		tiny_string value = (*it);
+		res->push(asAtomHandler::fromObject(abstract_s(sys, value)));
+	}
+	th->lastOperationStatus="noError";
+	ret = asAtomHandler::fromObject(res);
 }
 
 ASFUNCTIONBODY_ATOM(CurrencyFormatter,parse)
